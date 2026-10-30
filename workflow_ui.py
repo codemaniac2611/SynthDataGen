@@ -2,6 +2,7 @@
 
 import pandas as pd
 import streamlit as st
+from workflow_ai import interpret_workflow_with_nemotron
 
 from workflow_engine import run_workflow
 
@@ -165,6 +166,37 @@ def render_workflow_simulator():
         step=1,
         key="workflow_seed",
     )
+
+
+    st.subheader("Generate a workflow with AI")
+    workflow_prompt = st.text_area(
+        "Describe the workflow you want to simulate",
+        placeholder="Example: Create an employee, assign payroll, and provision system access.",
+        key="ai_workflow_prompt",
+    )
+
+    if st.button("Generate with Nemotron", key="generate_ai_workflow", use_container_width=True):
+        if not workflow_prompt.strip():
+            st.warning("Describe a workflow first.")
+        else:
+            try:
+                spec = interpret_workflow_with_nemotron(workflow_prompt)
+                st.session_state["workflow_ai_spec"] = spec
+                st.session_state.pop("workflow_result", None)
+                st.success("Workflow generated. Review it below.")
+            except Exception as exc:
+                st.error(f"AI generation failed: {type(exc).__name__}: {exc}")
+
+    ai_spec = st.session_state.get("workflow_ai_spec")
+    if ai_spec:
+        with st.expander("Review generated workflow", expanded=True):
+            st.json(ai_spec)
+        if st.button("Execute AI workflow", type="primary", key="execute_ai_workflow", use_container_width=True):
+            try:
+                st.session_state["workflow_result"] = run_workflow(ai_spec, seed=int(seed))
+            except Exception as exc:
+                st.session_state.pop("workflow_result", None)
+                st.error(f"Execution failed: {type(exc).__name__}: {exc}")
 
     if st.button(
         "Run employee transfer",

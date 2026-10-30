@@ -4,6 +4,7 @@ import re
 
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -306,6 +307,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+page = st.radio(
+    "Workspace",
+    ["Generate", "Scenario Lab"],
+    horizontal=True,
+    label_visibility="collapsed",
+)
+
+if page == "Scenario Lab":
+    st.title("Scenario Lab")
+    st.caption("Simulate linked HR, payroll and access-management workflows.")
+    from workflow_ui import render_workflow_simulator
+    render_workflow_simulator()
+    st.stop()
+
 st.markdown('<div class="hero-title">SynthDataGen</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="hero-subtitle">Describe the data you need. Generate and verify it.</div>',
@@ -477,14 +492,14 @@ if "synth_df" in st.session_state:
         st.dataframe(
             interpretation_df,
             hide_index=True,
-            width="stretch",
+            use_container_width=True,
         )
         st.subheader("Linked transfer tables")
         tables = st.session_state["synth_tables"]
         table_tabs = st.tabs(list(tables.keys()))
         for tab, (name, table) in zip(table_tabs, tables.items()):
             with tab:
-                st.dataframe(table.head(100), hide_index=True, width="stretch")
+                st.dataframe(table.head(100), hide_index=True, use_container_width=True)
                 st.download_button(
                     f"Download {name} (CSV)",
                     data=table.to_csv(index=False).encode("utf-8"),
@@ -497,8 +512,106 @@ if "synth_df" in st.session_state:
             "Validation checks verify the generated scenario and failure counts."
         )
     else:
+        st.subheader("Dataset overview")
+
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Total records", f"{len(df):,}")
+        metric_cols[1].metric("Features", f"{len(df.columns):,}")
+        metric_cols[2].metric("Missing values", f"{int(df.isna().sum().sum()):,}")
+        metric_cols[3].metric("Duplicate rows", f"{int(df.duplicated().sum()):,}")
+
+        numeric_cols = df.select_dtypes(include="number").columns.tolist()
+        date_cols = [
+            c for c in df.columns
+            if pd.api.types.is_datetime64_any_dtype(df[c])
+        ]
+        categorical_cols = [
+            c for c in df.select_dtypes(include=["object", "category", "bool"]).columns
+            if df[c].nunique(dropna=True) <= 30
+        ]
+
+        def style_chart(fig, height=350):
+            fig.update_layout(
+                template="plotly_dark",
+                height=height,
+                title_x=0.03,
+                margin=dict(l=25, r=20, t=55, b=25),
+                font=dict(family="Arial", size=12),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+            )
+            return fig
+
+        st.divider()
+        st.subheader("Feature distributions")
+
+        for i in range(0, min(len(numeric_cols), 4), 2):
+            chart_cols = st.columns(2)
+            for j, column in enumerate(numeric_cols[i:i + 2]):
+                fig = px.histogram(
+                    df, x=column, nbins=30,
+                    title=f"{column.replace(chr(95), chr(32)).title()} distribution",
+                    color_discrete_sequence=["#60A5FA"],
+                )
+                fig.update_traces(marker_line_width=0)
+                chart_cols[j].plotly_chart(
+                    style_chart(fig), use_container_width=True
+                )
+
+        if categorical_cols:
+            st.subheader("Category analysis")
+            chart_cols = st.columns(2)
+            for i, column in enumerate(categorical_cols[:2]):
+                counts = (
+                    df[column].astype(str).value_counts().head(12)
+                    .rename_axis(column).reset_index(name="Count")
+                )
+                fig = px.bar(
+                    counts, x="Count", y=column, orientation="h",
+                    title=f"{column.replace(chr(95), chr(32)).title()} breakdown",
+                    color="Count",
+                    color_continuous_scale=["#2563EB", "#38BDF8"],
+                )
+                fig.update_layout(yaxis={"categoryorder": "total ascending"})
+                chart_cols[i].plotly_chart(
+                    style_chart(fig), use_container_width=True
+                )
+
+        if date_cols:
+            st.subheader("Time-series analysis")
+            column = date_cols[0]
+            trend = (
+                df.dropna(subset=[column])
+                .set_index(column).resample("MS").size()
+                .rename("Records").reset_index()
+            )
+            fig = px.line(
+                trend, x=column, y="Records",
+                title=f"Records over time",
+                markers=True,
+                color_discrete_sequence=["#38BDF8"],
+            )
+            fig.update_traces(line=dict(width=3))
+            st.plotly_chart(
+                style_chart(fig, 400), use_container_width=True
+            )
+
+        if len(numeric_cols) >= 2:
+            st.subheader("Correlation analysis")
+            correlation = df[numeric_cols].corr()
+            fig = px.imshow(
+                correlation, text_auto=".2f",
+                color_continuous_scale="RdBu_r",
+                zmin=-1, zmax=1, aspect="auto",
+                title="Relationships between numeric features",
+            )
+            st.plotly_chart(
+                style_chart(fig, 480), use_container_width=True
+            )
+
+        st.divider()
         st.subheader("Data preview")
-        st.dataframe(df.head(100), hide_index=True, width="stretch")
+        st.dataframe(df.head(100), hide_index=True, use_container_width=True)
         st.download_button(
             "Download dataset (CSV)",
             data=df.to_csv(index=False).encode("utf-8"),
@@ -521,11 +634,3 @@ if "synth_df" in st.session_state:
 
     with st.expander("Inferred schema and limitations"):
         st.json(plan)
-
-
-
-# Workflow simulation is an additional feature; existing dataset generation
-# remains available above.
-from workflow_ui import render_workflow_simulator
-
-render_workflow_simulator()
