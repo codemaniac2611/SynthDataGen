@@ -25,6 +25,11 @@ BASE_URL = bytes([104,116,116,112,115,58,47,47,97,112,105,46,116,111,107,101,110
 def interpret_transfer_with_nemotron(prompt):
     api_key = os.getenv("NEBIUS_API_KEY")
     if not api_key:
+        try:
+            api_key = st.secrets["NEBIUS_API_KEY"]
+        except (KeyError, FileNotFoundError):
+            pass
+    if not api_key:
         raise RuntimeError("NEBIUS_API_KEY is not configured")
 
     client = OpenAI(api_key=api_key, base_url=BASE_URL)
