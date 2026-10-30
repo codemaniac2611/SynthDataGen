@@ -61,6 +61,53 @@ def infer_row_count(prompt):
 def infer_columns(prompt):
     text = prompt.lower().strip()
 
+    # Support explicitly listed columns, including bullet lists.
+    markers = (
+        "include these columns:",
+        "include the following columns:",
+        "include these fields:",
+        "include the following fields:",
+    )
+
+    for marker in markers:
+        position = text.find(marker)
+        if position == -1:
+            continue
+
+        field_text = text[position + len(marker):]
+        fields = []
+
+        for line in field_text.splitlines():
+            item = line.strip()
+
+            if not item:
+                if fields:
+                    break
+                continue
+
+            if item.endswith(":") and any(
+                word in item for word in ("requirements", "constraints", "instructions")
+            ):
+                break
+
+            if fields and not item.startswith(("-", "*", "•")):
+                break
+
+            item = item.lstrip("-*•0123456789.) ").strip()
+
+            for part in item.split(","):
+                part = part.strip(" .,:;")
+                if not part or len(part) > 60:
+                    continue
+
+                column = normalize_column(part)
+                if column and column not in fields:
+                    fields.append(column)
+
+        if fields:
+            return fields
+
+
     patterns = [
         r"\bwith columns?\s+(.+)",
         r"\bwith fields?\s+(.+)",
