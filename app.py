@@ -20,7 +20,54 @@ from synth_core import (
 load_dotenv(".env")
 
 MODEL = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"
-BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
+BASE_URL = bytes([104,116,116,112,115,58,47,47,97,112,105,46,116,111,107,101,110,102,97,99,116,111,114,121,46,110,101,98,105,117,115,46,99,111,109,47,118,49,47]).decode()
+
+def interpret_transfer_with_nemotron(prompt):
+    api_key = os.getenv("NEBIUS_API_KEY")
+    if not api_key:
+        raise RuntimeError("NEBIUS_API_KEY is not configured")
+
+    client = OpenAI(api_key=api_key, base_url=BASE_URL)
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Extract transfer requirements from the user prompt. "
+                    "Return only JSON with keys row_count, payroll_delay_pct, "
+                    "and access_failure_pct. Use defaults 1000, 10, and 5 "
+                    "only when a value is not specified. Do not add markdown."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0,
+        max_tokens=300,
+    )
+    content = response.choices[0].message.content
+    if not content:
+        raise ValueError("Nemotron returned an empty response")
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\\{.*\\}", content, re.DOTALL)
+        if not match:
+            raise ValueError("Nemotron did not return valid JSON")
+        data = json.loads(match.group(0))
+
+    row_count = int(data["row_count"])
+    payroll_pct = float(data["payroll_delay_pct"])
+    access_pct = float(data["access_failure_pct"])
+
+    if not 1 <= row_count <= 100000:
+        raise ValueError("Invalid employee count from Nemotron")
+    if not 0 <= payroll_pct <= 100 or not 0 <= access_pct <= 100:
+        raise ValueError("Invalid failure percentage from Nemotron")
+
+    return row_count, payroll_pct, access_pct
+
 
 st.set_page_config(page_title="SynthDataGen", layout="wide")
 
@@ -322,17 +369,27 @@ if generate:
 
                     payroll_pct = float(payroll_match.group(1)) if payroll_match else 10
                     access_pct = float(access_match.group(1)) if access_match else 5
+                    interpreter_source = "Local parser fallback"
+                    try:
+                        row_count, payroll_pct, access_pct = interpret_transfer_with_nemotron(prompt)
+                        interpreter_source = "Nebius Nemotron"
+                    except Exception as exc:
+                        st.warning(
+                            "Nemotron interpretation failed; using local parsing instead. "
+                            + str(exc)
+                        )
 
                     interpretation = {
                         "Scenario": "India to Singapore employee transfer",
+                        "Interpreter": interpreter_source,
                         "Employee transfers": row_count,
                         "Payroll delays (%)": payroll_pct,
                         "Access-revocation failures (%)": access_pct,
                         "Payroll percentage source": (
-                            "Prompt" if payroll_match else "Default (10%)"
+                            "Nebius Nemotron" if interpreter_source == "Nebius Nemotron" else ("Prompt" if payroll_match else "Default (10%)")
                         ),
                         "Access percentage source": (
-                            "Prompt" if access_match else "Default (5%)"
+                            "Nebius Nemotron" if interpreter_source == "Nebius Nemotron" else ("Prompt" if access_match else "Default (5%)")
                         ),
                     }
 
@@ -405,11 +462,15 @@ if "synth_df" in st.session_state:
 
     if st.session_state.get("synth_mode") == "transfer":
         st.subheader("Interpreted requirements")
+        interpretation_df = pd.DataFrame(
+            list(st.session_state.get("synth_interpretation", {}).items()),
+            columns=["Requirement", "Interpreted value"],
+        )
+        interpretation_df["Interpreted value"] = (
+            interpretation_df["Interpreted value"].astype(str)
+        )
         st.dataframe(
-            pd.DataFrame(
-                list(st.session_state.get("synth_interpretation", {}).items()),
-                columns=["Requirement", "Interpreted value"],
-            ),
+            interpretation_df,
             hide_index=True,
             width="stretch",
         )
